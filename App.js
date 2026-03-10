@@ -1,20 +1,23 @@
-import React from 'react';
-import { StatusBar } from 'expo-status-bar';
+import React, { useEffect } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useGameStore } from './src/store';
-import MenuScreen from './src/MenuScreen';
-import GameScreen from './src/GameScreen';
-import GameOverScreen from './src/GameOverScreen';
+import { BG_COLOR } from './src/constants/theme';
+import { GameScreen } from './src/screens/GameScreen';
+import { useGameStore } from './src/store/useGameStore';
 
 export default function App() {
-  const gameState = useGameStore((s) => s.gameState);
+  const loadHighScore = useGameStore(state => state.loadHighScore);
+
+  // Initialize store cache
+  useEffect(() => {
+    loadHighScore();
+  }, []);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <StatusBar style="light" hidden />
-      {gameState === 'menu' && <MenuScreen />}
-      {gameState === 'playing' && <GameScreen />}
-      {gameState === 'gameOver' && <GameOverScreen />}
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: BG_COLOR }}>
+        <GameScreen />
+      </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
