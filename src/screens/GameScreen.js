@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 
 import { useGameStore } from '../store/useGameStore';
-import { useGameEngine } from '../engine/useGameEngine';
+import { useGameEngine, POOL_SIZE } from '../engine/useGameEngine';
 import { AnimatedButton } from '../components/AnimatedButton';
 import { AnimatedObstacle } from '../components/AnimatedObstacle';
 import { FINGER_RADIUS, OBSTACLE_COLOR, PLAYER_COLOR_SAFE, PLAYER_COLOR_DANGER, BG_COLOR, ACCENT_COLOR } from '../constants/theme';
@@ -130,8 +130,8 @@ export const GameScreen = () => {
                             />
                         </View>
 
-                        {engine.activeObstacleIds.map(id => (
-                            <AnimatedObstacle key={id} id={id} obstaclesData={engine.obstaclesData} />
+                        {Array.from({ length: POOL_SIZE }).map((_, i) => (
+                            <AnimatedObstacle key={i} index={i} obstaclesPool={engine.obstaclesPool} />
                         ))}
 
                         <Animated.View style={[styles.fingerHitbox, fingerStyle]} />

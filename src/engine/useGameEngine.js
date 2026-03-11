@@ -1,6 +1,8 @@
-import { useState } from 'react';
 import { useSharedValue, useFrameCallback, runOnJS } from 'react-native-reanimated';
 import { SCREEN_WIDTH, SCREEN_HEIGHT, FINGER_RADIUS } from '../constants/theme';
+import { calculateGapWidth, calculateSpawnInterval } from './gameMath';
+
+export const POOL_SIZE = 16; // 8 pairs of walls (enough for mobile screen)
 
 export const useGameEngine = ({ triggerGameOver }) => {
     // UI Thread State
@@ -9,23 +11,17 @@ export const useGameEngine = ({ triggerGameOver }) => {
     const isTouching = useSharedValue(false);
     const isAlive = useSharedValue(false);
 
-    // React State for mounting components (1 fps updates)
-    const [activeObstacleIds, setActiveObstacleIds] = useState([]);
-
-    // UI thread state for fast geometry math (60 fps updates)
-    const obstaclesData = useSharedValue({});
+    // Object Pooling (Sıfır Mount/Unmount, Önceden Tahsis Edilmiş Bellek)
+    // dictionary yerine sabit boyutlu DİZİ kullanıyoruz.
+    const initialPool = Array.from({ length: POOL_SIZE }, () => ({
+        x: -1000, y: -1000, width: 0, height: 0, active: false
+    }));
+    const obstaclesPool = useSharedValue(initialPool);
+    const poolIndex = useSharedValue(0); // Havuzda (Pool) sıradaki ayrılacak indeks
 
     const lastObstacleSpawn = useSharedValue(0);
     const gameSpeed = useSharedValue(4.5);
     const scoreValue = useSharedValue(0);
-
-    const addObstacleIdReact = (id) => {
-        setActiveObstacleIds(prev => [...prev, id]);
-    };
-
-    const removeObstacleIdReact = (id) => {
-        setActiveObstacleIds(prev => prev.filter(i => i !== id));
-    };
 
     // HARDCORE UI THREAD GAME LOOP
     const gracePeriod = useSharedValue(true);
@@ -45,39 +41,33 @@ export const useGameEngine = ({ triggerGameOver }) => {
                 return;
             }
         } else {
-            // Ekrana ilk dokunuşta grace period biter
-            gracePeriod.value = false;
+            gracePeriod.value = false; // Ekrana ilk dokunuşta kurtulma payı biter
         }
 
+        // Objeleri güncellemek için referansı kopartıyoruz (Reactivity için)
+        const currentPool = obstaclesPool.value.slice();
+        let poolChanged = false;
+
         // Kural 2: Gerçek Labirent Oluştur (Duvar Kapıları)
-        // Yeni bir duvar satırı üretme hızı (skor arttıkça zorlaşır)
-        if (time - lastObstacleSpawn.value > Math.max(600, 1600 - scoreValue.value * 15)) {
-            // Labirentin açık kalacak boşluğu (Giderek daralır!)
-            const gapWidth = Math.max(FINGER_RADIUS * 3.5, 180 - (scoreValue.value * 1.5));
+        if (time - lastObstacleSpawn.value > calculateSpawnInterval(scoreValue.value)) {
+            const gapWidth = calculateGapWidth(scoreValue.value, FINGER_RADIUS);
             const maxGapStart = SCREEN_WIDTH - gapWidth;
             let gapStart = Math.random() * maxGapStart;
 
-            // Kenarlara çok yapışmayı hafifletelim
             if (gapStart < 10) gapStart = 10;
             if (gapStart > maxGapStart - 10) gapStart = maxGapStart - 10;
 
-            const leftWallId = time.toString() + "L";
-            const rightWallId = time.toString() + "R";
-
-            const newDict = Object.assign({}, obstaclesData.value);
-
-            // SOL DUVAR
-            newDict[leftWallId] = { x: -20, y: -80, width: gapStart + 20, height: 50 };
-
-            // SAĞ DUVAR
+            const idx = poolIndex.value;
             const rightWallX = gapStart + gapWidth;
-            newDict[rightWallId] = { x: rightWallX, y: -80, width: SCREEN_WIDTH - rightWallX + 20, height: 50 };
 
-            obstaclesData.value = newDict;
+            // Havuzdaki mevcut boş objeleri (geri dönüştürülen) tekrar kullan
+            // SOL DUVAR
+            currentPool[idx] = { x: -20, y: -80, width: gapStart + 20, height: 50, active: true };
+            // SAĞ DUVAR
+            currentPool[(idx + 1) % POOL_SIZE] = { x: rightWallX, y: -80, width: SCREEN_WIDTH - rightWallX + 20, height: 50, active: true };
 
-            runOnJS(addObstacleIdReact)(leftWallId);
-            runOnJS(addObstacleIdReact)(rightWallId);
-
+            poolIndex.value = (idx + 2) % POOL_SIZE;
+            poolChanged = true;
             lastObstacleSpawn.value = time;
         }
 
@@ -85,28 +75,24 @@ export const useGameEngine = ({ triggerGameOver }) => {
         let collisionDetected = false;
 
         gameSpeed.value += 0.0008 * elapsedFactor;
-
-        // SKORU ÇOK YAVAŞLATTIK (Saniyede yaklaşık 1 puan artar)
         scoreValue.value += (0.015 * elapsedFactor);
 
-        const currentDict = Object.assign({}, obstaclesData.value);
-        let dictChanged = false;
+        for (let i = 0; i < POOL_SIZE; i++) {
+            if (!currentPool[i].active) continue;
 
-        for (const id in currentDict) {
-            const obs = currentDict[id];
+            const obs = currentPool[i];
             const newY = obs.y + gameSpeed.value * elapsedFactor;
 
             if (newY > SCREEN_HEIGHT + 100) {
-                // Engel ekrandan çıktı, parçala
-                delete currentDict[id];
-                runOnJS(removeObstacleIdReact)(id);
-                dictChanged = true;
+                // Ekrandan çıktı -> Objeyi geri dönüştür (Deactivate)
+                currentPool[i] = { ...obs, active: false, y: -1000 };
+                poolChanged = true;
                 continue;
             }
 
             // Pozisyonu güncelle
-            currentDict[id].y = newY;
-            dictChanged = true;
+            currentPool[i] = { ...obs, y: newY };
+            poolChanged = true;
 
             // Çarpışma Testi
             let testX = fingerX.value;
@@ -129,8 +115,8 @@ export const useGameEngine = ({ triggerGameOver }) => {
             }
         }
 
-        if (dictChanged) {
-            obstaclesData.value = currentDict;
+        if (poolChanged) {
+            obstaclesPool.value = currentPool; // Reanimated trigger
         }
 
         // Kural 4: Ölüm
@@ -142,8 +128,10 @@ export const useGameEngine = ({ triggerGameOver }) => {
 
     const startGameEngine = () => {
         gracePeriod.value = true;
-        obstaclesData.value = {};
-        setActiveObstacleIds([]);
+        obstaclesPool.value = Array.from({ length: POOL_SIZE }, () => ({
+            x: -1000, y: -1000, width: 0, height: 0, active: false
+        }));
+        poolIndex.value = 0;
         scoreValue.value = 0;
         gameSpeed.value = 4.5;
         isAlive.value = true;
@@ -162,8 +150,7 @@ export const useGameEngine = ({ triggerGameOver }) => {
         fingerY,
         isTouching,
         isAlive,
-        obstaclesData,
-        activeObstacleIds,
+        obstaclesPool,
         scoreValue,
         startGameEngine,
         pauseGameEngine,

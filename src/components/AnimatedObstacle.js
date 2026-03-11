@@ -1,14 +1,13 @@
-
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { OBSTACLE_COLOR } from '../constants/theme';
 
-export const AnimatedObstacle = ({ id, obstaclesData }) => {
+export const AnimatedObstacle = ({ index, obstaclesPool }) => {
     const style = useAnimatedStyle(() => {
-        const obstacle = obstaclesData.value[id];
-        if (!obstacle) {
-            return { transform: [{ translateX: -1000 }, { translateY: -1000 }] }; // hide if deleted
+        const obstacle = obstaclesPool.value[index];
+        if (!obstacle || !obstacle.active) {
+            return { transform: [{ translateX: -1000 }, { translateY: -1000 }] }; // hide if inactive
         }
         return {
             transform: [
